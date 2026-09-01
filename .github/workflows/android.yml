@@ -20,7 +20,7 @@ jobs:
           cache: gradle
       - uses: android-actions/setup-android@v3
       - name: Install Android 17 platform
-        run: sdkmanager "platforms;android-37"
+        run: sdkmanager --channel=3 "platforms;android-37"
       - name: Verify wrapper
         run: chmod +x gradlew
       - name: Compile and lint
