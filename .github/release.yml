@@ -1,0 +1,8 @@
+changelog:
+  categories:
+    - title: New features
+      labels: [enhancement, feature]
+    - title: Compatibility fixes
+      labels: [compatibility, bug]
+    - title: Other changes
+      labels: ["*"]

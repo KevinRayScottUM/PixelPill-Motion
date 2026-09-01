@@ -1,0 +1,22 @@
+/.gradle/
+/local.properties
+/**/build/
+/.idea/
+*.iml
+/work/
+/outputs/
+
+# Private signing material and local secrets
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+*PRIVATE*
+*DO-NOT-PUBLISH*
+signing.properties
+keystore.properties
+secrets.properties
+.env
+.env.*

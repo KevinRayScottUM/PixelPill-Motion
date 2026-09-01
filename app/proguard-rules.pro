@@ -1,0 +1,2 @@
+-keep class io.github.pixelpill.motion.xposed.PillMotionHook { *; }
+-keep class de.robv.android.xposed.** { *; }
