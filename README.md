@@ -2,7 +2,7 @@
 
 PixelPill Motion is a focused Vector / LSPosed module that gives the Pixel gesture-navigation handle a natural press, shrink, and spring-back response while leaving Android's navigation and Circle to Search gesture ownership untouched.
 
-Current public release: **v1.0.0** (`versionCode` 6).
+Current public release: **v1.0.1** (`versionCode` 7).
 
 ```text
 Touch / long-press
@@ -22,8 +22,9 @@ PixelPill Motion changes the handle's visual interaction; it does not replace An
 
 - AOSP-like default motion: 76% pressed width, 120 ms press, 190 ms release, 8% overshoot.
 - AOSP-like, Pixel subtle, Spring, and Custom profiles.
+- Stable-bounds SystemUI drawing that prevents duplicate press animators and third-party-app navbar flashing.
 - Immediate touch motion or long-press-only behavior.
-- Adjustable width, timing, overshoot, and haptic strength.
+- Adjustable width, timing, overshoot, and persisted Off/Light/Medium/Strong haptic levels.
 - Material 3 UI with dynamic color, light/dark themes, and an interactive preview.
 - Focused scope: `com.android.systemui`, plus Pixel Launcher for the Pixel Fold/taskbar handle.
 - Multi-path compatibility probes for Android SystemUI package moves and method signature changes.
@@ -38,7 +39,7 @@ PixelPill Motion changes the handle's visual interaction; it does not replace An
 
 ## Install and activate
 
-1. Download and install `PixelPill-Motion-v1.0.0-release.apk` from GitHub Releases.
+1. Download and install `PixelPill-Motion-v1.0.1-release.apk` from GitHub Releases.
 2. Open Vector, LSPosed, or another compatible Xposed manager and enable **PixelPill Motion**.
 3. Scope the module to **System UI** (`com.android.systemui`). On the tested Pixel Fold setup, also select **Pixel Launcher** (`com.google.android.apps.nexuslauncher`) because the unfolded/stashed taskbar handle is rendered there.
 4. Reboot the phone. For later settings changes, the app's **Restart UI services · Apply now** action can refresh SystemUI and Pixel Launcher after root access is granted; a full reboot remains the safest fallback.
@@ -59,9 +60,9 @@ The app has a minimum SDK of 33, but that does not imply verified hook compatibi
 
 ## Implementation
 
-The module drives SystemUI's own `ButtonDispatcher.animateLongPress(...)` → `NavigationHandle.animateLongPress(...)` pulse animator. It also observes `NavigationBarView` touch callbacks for immediate ordinary-touch feedback. Custom width is applied only inside one `NavigationHandle.onDraw()` Canvas save/restore pair; View scale, alpha, color, layout bounds, dark intensity, and Region Sampling remain untouched.
+For ordinary presses, the module observes `NavigationBarView` touch callbacks and drives one per-handle `IDLE → PRESSING → PRESSED → RETURNING` state machine. The rendered width is changed only inside a `NavigationHandle.onDraw()` Canvas save/restore pair, and an interrupted animation continues from its current rendered scale. Duplicate callbacks and duplicate native `animateLongPress(...)` visual requests are suppressed while the module owns the animation.
 
-The hook does **not** consume `MotionEvent`, replace the SystemUI long-click listener, alter Circle to Search arguments, or suppress an original method result. Its goal is to preserve the system long-press path used by Circle to Search while modifying only the handle's visual response. The setting provider is read-only and exposes only non-sensitive animation preferences.
+The hook does **not** consume `MotionEvent`, replace the SystemUI long-click listener, alter Circle to Search arguments, resize the handle View, or mutate alpha, color, dark intensity, visibility, navbar background, or Region Sampling. It skips only redundant void visual-animation calls; the original SystemUI gesture and long-press pipelines continue normally. The setting provider is read-only and exposes only non-sensitive animation preferences.
 
 Relevant upstream references:
 
@@ -97,7 +98,7 @@ The Xposed API 82 jar is compile-only and is not packaged in the APK. Its SHA-25
 
 - Private Pixel SystemUI details can change with any OTA; a device log is needed to add a new fallback.
 - The app cannot authoritatively query whether a framework injected its hook. Use Vector/LSPosed scope state and the `PixelPillMotion` framework log tag.
-- Pixel Fold / Android 17 press and release motion was verified in a real Vector session with 23 balanced start/finish and down/up events and no reported hook exceptions. Circle to Search should still be rechecked after each Pixel OTA.
+- The v1.0.1 animation path was prepared from Pixel Fold reports covering launcher and ordinary-app rendering differences. Recheck press/release motion and Circle to Search after each Pixel OTA.
 - Folded/unfolded and transient-navigation states can use different handle instances; each discovered instance is animated independently.
 
 ## Privacy and license

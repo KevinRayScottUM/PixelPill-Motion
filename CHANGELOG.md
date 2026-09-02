@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.1-rc1 - 2026-09-02
+## 1.0.1 - 2026-09-02
 
 - Fixed Motion Profile display and persistence by using one typed profile value from UI through the cross-process runtime configuration.
 - Fixed Haptic Strength persistence and added distinct touch-haptic primitive scales with capability-aware amplitude and view-feedback fallbacks.
