@@ -12,8 +12,8 @@ android {
         applicationId = "io.github.pixelpill.motion"
         minSdk = 33
         targetSdk = 37
-        versionCode = 8
-        versionName = "1.0.2-rc1"
+        versionCode = 9
+        versionName = "1.0.2-rc2"
     }
     signingConfigs {
         if (releaseStoreFile != null && releaseStorePassword != null

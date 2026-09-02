@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.2-rc2 - 2026-09-02
+
+- Removed all SystemUI `NavigationHandle.onDraw` interception and per-frame Canvas invalidation.
+- Removed dark-intensity deferral so each newly opened app's navigation-bar appearance and region sampling remain entirely owned by SystemUI.
+- Moved the press/release effect to a centered `View.scaleX` RenderNode transform that preserves layout bounds and reuses SystemUI's recorded pill content.
+- Preserved single-owner gesture arbitration, non-blocking Direct Boot settings, haptic de-duplication, and Pixel Fold stashed-handle handling from RC1.
+
 ## 1.0.2-rc1 - 2026-09-02
 
 - Removed the cross-process race between Quickstep's remote `SystemUiProxy` animation and the module's SystemUI touch observer by assigning the main gesture handle one SystemUI animation owner.

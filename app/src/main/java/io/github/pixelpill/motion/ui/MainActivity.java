@@ -171,7 +171,7 @@ public final class MainActivity extends AppCompatActivity {
                 .setTitle("Compatibility & hook status")
                 .setMessage("Current motion profile: " + profile.displayName
                         + "\nCurrent module haptic: " + haptic.displayName
-                        + "\nSystemUI animation path: single-owner stable-bounds drawing"
+                        + "\nSystemUI animation path: single-owner RenderNode scaleX"
                         + "\nPixel Fold taskbar path: native Launcher scale"
                         + "\nSettings startup path: Direct Boot compatible"
                         + "\n\nRequired scope: System UI"
