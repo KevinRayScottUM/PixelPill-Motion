@@ -12,8 +12,8 @@ android {
         applicationId = "io.github.pixelpill.motion"
         minSdk = 33
         targetSdk = 37
-        versionCode = 6
-        versionName = "1.0.0"
+        versionCode = 7
+        versionName = "1.0.1-rc1"
     }
     signingConfigs {
         if (releaseStoreFile != null && releaseStorePassword != null
@@ -36,7 +36,7 @@ android {
             buildConfigField("boolean", "VERBOSE_HOOK_LOGS", "true")
         }
         release {
-            buildConfigField("String", "BUILD_CHANNEL", "\"stable\"")
+            buildConfigField("String", "BUILD_CHANNEL", "\"release-candidate\"")
             buildConfigField("boolean", "VERBOSE_HOOK_LOGS", "false")
             isMinifyEnabled = false
             isShrinkResources = false
@@ -59,4 +59,5 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("com.google.android.material:material:1.13.0")
     implementation("androidx.core:core:1.17.0")
+    testImplementation("junit:junit:4.13.2")
 }

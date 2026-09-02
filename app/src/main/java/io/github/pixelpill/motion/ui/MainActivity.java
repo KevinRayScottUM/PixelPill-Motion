@@ -3,13 +3,9 @@ package io.github.pixelpill.motion.ui;
 import android.annotation.SuppressLint;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.graphics.Color;
-import android.net.Uri;
 import android.os.Bundle;
-import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
-import android.view.ViewGroup;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -30,18 +26,25 @@ import com.google.android.material.slider.Slider;
 import com.google.android.material.appbar.MaterialToolbar;
 
 import io.github.pixelpill.motion.BuildConfig;
+import io.github.pixelpill.motion.settings.HapticStrength;
 import io.github.pixelpill.motion.settings.MotionConfig;
+import io.github.pixelpill.motion.settings.MotionProfile;
 
 @SuppressLint("SetTextI18n") // The initial public UI is intentionally English-only.
 public final class MainActivity extends AppCompatActivity {
     private SharedPreferences prefs;
     private PillPreviewView preview;
-    private TextView ratioValue, pressValue, releaseValue, overshootValue, modeValue;
+    private TextView ratioValue, pressValue, releaseValue, overshootValue;
+    private MaterialButton modeButton, hapticButton;
+    private MaterialSwitch hapticsToggle;
+    private Slider ratioSlider, pressSlider, releaseSlider, overshootSlider;
+    private boolean syncingHaptics;
 
     @Override protected void onCreate(Bundle state) {
         DynamicColors.applyToActivityIfAvailable(this);
         super.onCreate(state);
         prefs = getSharedPreferences(MotionConfig.PREFS, 0);
+        migrateLegacyHapticState();
         setContentView(buildContent());
     }
 
@@ -54,28 +57,38 @@ public final class MainActivity extends AppCompatActivity {
 
         preview = new PillPreviewView(this); preview.setBackgroundColor(0xff1c1b1f);
         MaterialCardView previewCard = card(); previewCard.addView(preview, match(dp(148))); body.addView(previewCard, match(dp(148)));
-        TextView hint = text("Touch the pill to preview · changes apply after System UI restarts", 13); hint.setGravity(Gravity.CENTER); hint.setPadding(0,dp(8),0,dp(14)); body.addView(hint);
+        TextView hint = text("Touch the pill to preview · changes propagate to active hooks", 13); hint.setGravity(Gravity.CENTER); hint.setPadding(0,dp(8),0,dp(14)); body.addView(hint);
 
-        MaterialSwitch enabled = toggle("Enable motion", "Master switch for all hook behavior", "enabled", true); body.addView(enabled);
+        MaterialSwitch enabled = toggle("Enable motion", "Master switch for all hook behavior", MotionConfig.KEY_ENABLED, true); body.addView(enabled);
         body.addView(section("Motion profile"));
-        modeValue = text("AOSP-like", 16); modeValue.setCompoundDrawablePadding(dp(10));
-        MaterialButton mode = button("Animation mode · AOSP-like");
-        mode.setOnClickListener(v -> chooseMode(mode)); body.addView(mode, match(dp(52)));
-        ratioValue = valueLabel("Press width", percent(getFloat("shrink_ratio",.76f))); body.addView(ratioValue);
-        body.addView(slider("shrink_ratio", .55f, .95f, .01f, getFloat("shrink_ratio",.76f), v -> ratioValue.setText("Press width\n"+percent(v))));
-        pressValue = valueLabel("Press duration", ms(getInt("press_duration",120))); body.addView(pressValue);
-        body.addView(slider("press_duration", 60, 300, 10, getInt("press_duration",120), v -> pressValue.setText("Press duration\n"+ms(Math.round(v)))));
-        releaseValue = valueLabel("Release duration", ms(getInt("release_duration",190))); body.addView(releaseValue);
-        body.addView(slider("release_duration", 80, 420, 10, getInt("release_duration",190), v -> releaseValue.setText("Release duration\n"+ms(Math.round(v)))));
-        overshootValue = valueLabel("Spring overshoot", percent(getFloat("overshoot",.08f))); body.addView(overshootValue);
-        body.addView(slider("overshoot", 0, .25f, .01f, getFloat("overshoot",.08f), v -> overshootValue.setText("Spring overshoot\n"+percent(v))));
+        MotionProfile currentProfile = currentProfile();
+        modeButton = button("Animation mode · " + currentProfile.displayName);
+        modeButton.setOnClickListener(v -> chooseMode()); body.addView(modeButton, match(dp(52)));
+        ratioValue = valueLabel("Press width", percent(getFloat(MotionConfig.KEY_SHRINK_RATIO,.76f))); body.addView(ratioValue);
+        ratioSlider = slider(MotionConfig.KEY_SHRINK_RATIO, .55f, .95f, .01f,
+                getFloat(MotionConfig.KEY_SHRINK_RATIO,.76f), v -> ratioValue.setText("Press width\n"+percent(v)));
+        body.addView(ratioSlider);
+        pressValue = valueLabel("Press duration", ms(getInt(MotionConfig.KEY_PRESS_DURATION,120))); body.addView(pressValue);
+        pressSlider = slider(MotionConfig.KEY_PRESS_DURATION, 60, 300, 10,
+                getInt(MotionConfig.KEY_PRESS_DURATION,120), v -> pressValue.setText("Press duration\n"+ms(Math.round(v))));
+        body.addView(pressSlider);
+        releaseValue = valueLabel("Release duration", ms(getInt(MotionConfig.KEY_RELEASE_DURATION,190))); body.addView(releaseValue);
+        releaseSlider = slider(MotionConfig.KEY_RELEASE_DURATION, 80, 420, 10,
+                getInt(MotionConfig.KEY_RELEASE_DURATION,190), v -> releaseValue.setText("Release duration\n"+ms(Math.round(v))));
+        body.addView(releaseSlider);
+        overshootValue = valueLabel("Spring overshoot", percent(getFloat(MotionConfig.KEY_OVERSHOOT,.08f))); body.addView(overshootValue);
+        overshootSlider = slider(MotionConfig.KEY_OVERSHOOT, 0, .25f, .01f,
+                getFloat(MotionConfig.KEY_OVERSHOOT,.08f), v -> overshootValue.setText("Spring overshoot\n"+percent(v)));
+        body.addView(overshootSlider);
 
         body.addView(section("Interaction"));
-        body.addView(toggle("Animate ordinary touch", "Respond immediately on ACTION_DOWN", "animate_touch", true));
-        body.addView(toggle("Long press only", "Skip normal taps; animate the system long-press chain", "long_press_only", false));
-        body.addView(toggle("Haptic feedback", "A restrained tick when the pill is pressed", "haptics", true));
-        MaterialButton haptic = button("Haptic strength · Light"); haptic.setOnClickListener(v -> chooseHaptic(haptic)); body.addView(haptic, match(dp(52)));
-        body.addView(toggle("Circle to Search compatibility", "Never consume or replace the original long-press gesture", "circle_compatible", true));
+        body.addView(toggle("Animate ordinary touch", "Respond immediately on ACTION_DOWN", MotionConfig.KEY_ANIMATE_TOUCH, true));
+        body.addView(toggle("Long press only", "Skip normal taps; animate the system long-press chain", MotionConfig.KEY_LONG_PRESS_ONLY, false));
+        hapticsToggle = buildHapticsToggle(); body.addView(hapticsToggle);
+        HapticStrength currentStrength = currentHapticStrength();
+        hapticButton = button("Haptic strength · " + currentStrength.displayName);
+        hapticButton.setOnClickListener(v -> chooseHaptic()); body.addView(hapticButton, match(dp(52)));
+        body.addView(toggle("Circle to Search compatibility", "Never consume or replace the original long-press gesture", MotionConfig.KEY_CIRCLE_COMPATIBLE, true));
 
         body.addView(section("Tools & information"));
         MaterialButton restart = new MaterialButton(this);
@@ -97,23 +110,133 @@ public final class MainActivity extends AppCompatActivity {
     }
     private Slider slider(String key,float from,float to,float step,float value,ValueLabel label) {
         Slider s=new Slider(this); s.setValueFrom(from); s.setValueTo(to); s.setStepSize(step); s.setValue(value);
-        s.addOnChangeListener((slider,v,user)-> { if(!user)return; SharedPreferences.Editor e=prefs.edit(); if(key.contains("duration"))e.putInt(key,Math.round(v));else e.putFloat(key,v); e.apply(); label.set(v); changed(); }); return s;
+        s.addOnChangeListener((slider,v,user)-> {
+            if(!user)return;
+            SharedPreferences.Editor e=prefs.edit();
+            if(MotionConfig.KEY_PRESS_DURATION.equals(key)
+                    || MotionConfig.KEY_RELEASE_DURATION.equals(key)) e.putInt(key,Math.round(v));
+            else e.putFloat(key,v);
+            e.putString(MotionConfig.KEY_MODE, MotionProfile.CUSTOM.preferenceValue).apply();
+            modeButton.setText("Animation mode · " + MotionProfile.CUSTOM.displayName);
+            label.set(v); changed();
+        }); return s;
     }
-    private void chooseMode(MaterialButton b) {
-        String[] names={"AOSP-like (recommended)","Pixel subtle","Spring","Custom"}; String[] keys={"aosp","subtle","spring","custom"};
-        int checked=index(keys,prefs.getString("mode","aosp")); new MaterialAlertDialogBuilder(this).setTitle("Animation mode").setSingleChoiceItems(names,checked,(d,w)->{
-            prefs.edit().putString("mode",keys[w]).apply(); b.setText("Animation mode · "+names[w].replace(" (recommended)","")); applyPreset(keys[w]); d.dismiss(); }).show();
+    private void chooseMode() {
+        MotionProfile[] profiles = MotionProfile.values();
+        String[] names = new String[profiles.length];
+        for (int i = 0; i < profiles.length; i++) {
+            names[i] = profiles[i].displayName
+                    + (profiles[i] == MotionProfile.AOSP_LIKE ? " (recommended)" : "");
+        }
+        int checked = currentProfile().ordinal();
+        new MaterialAlertDialogBuilder(this).setTitle("Animation mode")
+                .setSingleChoiceItems(names, checked, (dialog, which) -> {
+                    applyProfile(profiles[which]);
+                    dialog.dismiss();
+                }).show();
     }
-    private void applyPreset(String mode) {
-        SharedPreferences.Editor e=prefs.edit();
-        if(mode.equals("aosp")) e.putFloat("shrink_ratio",.76f).putInt("press_duration",120).putInt("release_duration",190).putFloat("overshoot",.08f);
-        if(mode.equals("subtle")) e.putFloat("shrink_ratio",.88f).putInt("press_duration",140).putInt("release_duration",180).putFloat("overshoot",.03f);
-        if(mode.equals("spring")) e.putFloat("shrink_ratio",.70f).putInt("press_duration",105).putInt("release_duration",240).putFloat("overshoot",.16f);
-        e.apply(); changed(); recreate();
+    private void applyProfile(MotionProfile profile) {
+        SharedPreferences.Editor editor = prefs.edit()
+                .putString(MotionConfig.KEY_MODE, profile.preferenceValue);
+        if (profile.hasPreset()) {
+            editor.putFloat(MotionConfig.KEY_SHRINK_RATIO, profile.shrinkRatio)
+                    .putInt(MotionConfig.KEY_PRESS_DURATION, profile.pressDuration)
+                    .putInt(MotionConfig.KEY_RELEASE_DURATION, profile.releaseDuration)
+                    .putFloat(MotionConfig.KEY_OVERSHOOT, profile.overshoot);
+        }
+        editor.apply();
+        modeButton.setText("Animation mode · " + profile.displayName);
+        if (profile.hasPreset()) updateMotionControls(profile.shrinkRatio,
+                profile.pressDuration, profile.releaseDuration, profile.overshoot);
+        changed();
     }
-    private void chooseHaptic(MaterialButton b) { String[] n={"Off","Light","Medium","Strong"}; int c=prefs.getInt("haptic_strength",1); new MaterialAlertDialogBuilder(this).setTitle("Haptic strength").setSingleChoiceItems(n,c,(d,w)->{prefs.edit().putInt("haptic_strength",w).putBoolean("haptics",w!=0).apply();b.setText("Haptic strength · "+n[w]);changed();d.dismiss();}).show(); }
-    private void showStatus() { new MaterialAlertDialogBuilder(this).setIcon(io.github.pixelpill.motion.R.drawable.ic_launcher).setTitle("Compatibility & hook status").setMessage("Required scope: System UI\nPixel Fold/taskbar scope: Pixel Launcher\nAndroid: "+android.os.Build.VERSION.RELEASE+" (API "+android.os.Build.VERSION.SDK_INT+")\nDevice: "+android.os.Build.MANUFACTURER+" "+android.os.Build.MODEL+"\n\nOn Pixel Fold, enable both scopes and reboot once. Framework logs distinguish installed hooks from actual animation calls using tag PixelPillMotion.").setPositiveButton("Done",null).show(); }
+    private void chooseHaptic() {
+        HapticStrength[] strengths = HapticStrength.values();
+        String[] names = new String[strengths.length];
+        for (int i = 0; i < strengths.length; i++) names[i] = strengths[i].displayName;
+        new MaterialAlertDialogBuilder(this).setTitle("Haptic strength")
+                .setSingleChoiceItems(names, currentHapticStrength().ordinal(), (dialog, which) -> {
+                    persistHapticStrength(strengths[which]);
+                    dialog.dismiss();
+                }).show();
+    }
+    private void showStatus() {
+        MotionProfile profile = currentProfile();
+        HapticStrength haptic = currentHapticStrength();
+        new MaterialAlertDialogBuilder(this)
+                .setIcon(io.github.pixelpill.motion.R.drawable.ic_launcher)
+                .setTitle("Compatibility & hook status")
+                .setMessage("Current motion profile: " + profile.displayName
+                        + "\nCurrent module haptic: " + haptic.displayName
+                        + "\nSystemUI animation path: stable-bounds draw scaling"
+                        + "\nPixel Fold taskbar path: native Launcher scale"
+                        + "\n\nRequired scope: System UI"
+                        + "\nPixel Fold/taskbar scope: Pixel Launcher"
+                        + "\nAndroid: "+android.os.Build.VERSION.RELEASE+" (API "+android.os.Build.VERSION.SDK_INT+")"
+                        + "\nDevice: "+android.os.Build.MANUFACTURER+" "+android.os.Build.MODEL
+                        + "\n\nThe app cannot directly prove hook injection. Confirm active scopes in the Xposed manager and check the PixelPillMotion framework log after a reboot.")
+                .setPositiveButton("Done",null).show();
+    }
     private void showAbout() { new MaterialAlertDialogBuilder(this).setTitle("PixelPill Motion "+BuildConfig.VERSION_NAME).setMessage("A focused, open-source gesture-handle motion module.\n\nMIT licensed. No analytics, network permission, or background service. Settings are exposed read-only to System UI through a minimal provider.").setPositiveButton("Done",null).show(); }
+    private MaterialSwitch buildHapticsToggle() {
+        MaterialSwitch toggle = new MaterialSwitch(this);
+        toggle.setText("Haptic feedback\nA single module-owned press confirmation");
+        toggle.setTextSize(15); toggle.setPadding(dp(4),dp(10),dp(4),dp(10));
+        toggle.setChecked(currentHapticStrength().isEnabled());
+        toggle.setOnCheckedChangeListener((button, checked) -> {
+            if (syncingHaptics) return;
+            HapticStrength selected = checked ? HapticStrength.LIGHT : HapticStrength.OFF;
+            persistHapticStrength(selected);
+        });
+        return toggle;
+    }
+    private void persistHapticStrength(HapticStrength strength) {
+        prefs.edit()
+                .putInt(MotionConfig.KEY_HAPTIC_STRENGTH, strength.preferenceValue)
+                .putBoolean(MotionConfig.KEY_HAPTICS, strength.isEnabled())
+                .apply();
+        if (hapticButton != null) {
+            hapticButton.setText("Haptic strength · " + strength.displayName);
+        }
+        if (hapticsToggle != null && hapticsToggle.isChecked() != strength.isEnabled()) {
+            syncingHaptics = true;
+            try {
+                hapticsToggle.setChecked(strength.isEnabled());
+            } finally {
+                syncingHaptics = false;
+            }
+        }
+        changed();
+    }
+    private void migrateLegacyHapticState() {
+        int stored = prefs.getInt(MotionConfig.KEY_HAPTIC_STRENGTH,
+                HapticStrength.LIGHT.preferenceValue);
+        HapticStrength strength = HapticStrength.fromPreference(stored);
+        if (!prefs.getBoolean(MotionConfig.KEY_HAPTICS, true)) strength = HapticStrength.OFF;
+        boolean enabled = strength.isEnabled();
+        if (stored != strength.preferenceValue
+                || prefs.getBoolean(MotionConfig.KEY_HAPTICS, true) != enabled) {
+            prefs.edit().putInt(MotionConfig.KEY_HAPTIC_STRENGTH, strength.preferenceValue)
+                    .putBoolean(MotionConfig.KEY_HAPTICS, enabled).apply();
+        }
+    }
+    private MotionProfile currentProfile() {
+        return MotionProfile.fromPreference(prefs.getString(MotionConfig.KEY_MODE,
+                MotionProfile.AOSP_LIKE.preferenceValue));
+    }
+    private HapticStrength currentHapticStrength() {
+        if (!prefs.getBoolean(MotionConfig.KEY_HAPTICS, true)) return HapticStrength.OFF;
+        return HapticStrength.fromPreference(prefs.getInt(MotionConfig.KEY_HAPTIC_STRENGTH,
+                HapticStrength.LIGHT.preferenceValue));
+    }
+    private void updateMotionControls(float ratio, int press, int release, float overshoot) {
+        ratioSlider.setValue(ratio); pressSlider.setValue(press);
+        releaseSlider.setValue(release); overshootSlider.setValue(overshoot);
+        ratioValue.setText("Press width\n" + percent(ratio));
+        pressValue.setText("Press duration\n" + ms(press));
+        releaseValue.setText("Release duration\n" + ms(release));
+        overshootValue.setText("Spring overshoot\n" + percent(overshoot));
+    }
     private void confirmRestartSystemUi(MaterialButton button) {
         new MaterialAlertDialogBuilder(this)
                 .setTitle("Restart UI services?")
@@ -145,8 +268,18 @@ public final class MainActivity extends AppCompatActivity {
         });
     }
     private void resetDefaults() { prefs.edit().clear().apply(); changed(); Toast.makeText(this,"Defaults restored",Toast.LENGTH_SHORT).show(); recreate(); }
-    private void changed() { sendBroadcast(new Intent(MotionConfig.ACTION_CHANGED).setPackage("com.android.systemui")); updatePreview(); }
-    private void updatePreview() { if(preview!=null) preview.configure(getFloat("shrink_ratio",.76f),getInt("press_duration",120),getInt("release_duration",190),getFloat("overshoot",.08f)); }
+    private void changed() {
+        for (String packageName : new String[]{"com.android.systemui",
+                "com.google.android.apps.nexuslauncher", "com.android.launcher3"}) {
+            sendBroadcast(new Intent(MotionConfig.ACTION_CHANGED).setPackage(packageName));
+        }
+        updatePreview();
+    }
+    private void updatePreview() { if(preview!=null) preview.configure(
+            getFloat(MotionConfig.KEY_SHRINK_RATIO,.76f),
+            getInt(MotionConfig.KEY_PRESS_DURATION,120),
+            getInt(MotionConfig.KEY_RELEASE_DURATION,190),
+            getFloat(MotionConfig.KEY_OVERSHOOT,.08f)); }
     private MaterialCardView card(){ MaterialCardView c=new MaterialCardView(this); c.setRadius(dp(28)); c.setCardElevation(0); return c; }
     private MaterialButton button(String s){ MaterialButton b=new MaterialButton(this,null,com.google.android.material.R.attr.materialButtonOutlinedStyle); b.setText(s); b.setAllCaps(false); return b; }
     private TextView section(String s){ TextView t=text(s,14); t.setTextColor(resolve(androidx.appcompat.R.attr.colorPrimary)); t.setPadding(0,dp(24),0,dp(8)); return t; }
@@ -157,7 +290,6 @@ public final class MainActivity extends AppCompatActivity {
     private int dp(int n){return Math.round(n*getResources().getDisplayMetrics().density);}
     private float getFloat(String k,float d){return prefs.getFloat(k,d);} private int getInt(String k,int d){return prefs.getInt(k,d);}
     private String percent(float f){return Math.round(f*100)+"%";} private String ms(int n){return n+" ms";}
-    private int index(String[] a,String x){for(int i=0;i<a.length;i++)if(a[i].equals(x))return i;return 0;}
     private LinearLayout.LayoutParams match(int h){return new LinearLayout.LayoutParams(-1,h);} private LinearLayout.LayoutParams weight(){return new LinearLayout.LayoutParams(0,dp(52),1);}
     private interface ValueLabel{void set(float v);}
 }

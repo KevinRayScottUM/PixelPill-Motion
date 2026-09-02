@@ -14,17 +14,32 @@ public final class SettingsProvider extends ContentProvider {
         if (!"get_config".equals(method)) return Bundle.EMPTY;
         SharedPreferences p = requireContext().getSharedPreferences(MotionConfig.PREFS, 0);
         Bundle b = new Bundle();
-        b.putBoolean("enabled", p.getBoolean("enabled", true));
-        b.putString("mode", p.getString("mode", "aosp"));
-        b.putFloat("shrink_ratio", p.getFloat("shrink_ratio", .76f));
-        b.putInt("press_duration", p.getInt("press_duration", 120));
-        b.putInt("release_duration", p.getInt("release_duration", 190));
-        b.putFloat("overshoot", p.getFloat("overshoot", .08f));
-        b.putBoolean("long_press_only", p.getBoolean("long_press_only", false));
-        b.putBoolean("animate_touch", p.getBoolean("animate_touch", true));
-        b.putBoolean("haptics", p.getBoolean("haptics", true));
-        b.putInt("haptic_strength", p.getInt("haptic_strength", 1));
-        b.putBoolean("circle_compatible", p.getBoolean("circle_compatible", true));
+        b.putBoolean(MotionConfig.KEY_ENABLED,
+                p.getBoolean(MotionConfig.KEY_ENABLED, true));
+        b.putString(MotionConfig.KEY_MODE,
+                p.getString(MotionConfig.KEY_MODE, MotionProfile.AOSP_LIKE.preferenceValue));
+        b.putFloat(MotionConfig.KEY_SHRINK_RATIO,
+                p.getFloat(MotionConfig.KEY_SHRINK_RATIO, MotionProfile.AOSP_LIKE.shrinkRatio));
+        b.putInt(MotionConfig.KEY_PRESS_DURATION,
+                p.getInt(MotionConfig.KEY_PRESS_DURATION, MotionProfile.AOSP_LIKE.pressDuration));
+        b.putInt(MotionConfig.KEY_RELEASE_DURATION,
+                p.getInt(MotionConfig.KEY_RELEASE_DURATION, MotionProfile.AOSP_LIKE.releaseDuration));
+        b.putFloat(MotionConfig.KEY_OVERSHOOT,
+                p.getFloat(MotionConfig.KEY_OVERSHOOT, MotionProfile.AOSP_LIKE.overshoot));
+        b.putBoolean(MotionConfig.KEY_LONG_PRESS_ONLY,
+                p.getBoolean(MotionConfig.KEY_LONG_PRESS_ONLY, false));
+        b.putBoolean(MotionConfig.KEY_ANIMATE_TOUCH,
+                p.getBoolean(MotionConfig.KEY_ANIMATE_TOUCH, true));
+        int strength = p.getInt(MotionConfig.KEY_HAPTIC_STRENGTH,
+                HapticStrength.LIGHT.preferenceValue);
+        if (!p.getBoolean(MotionConfig.KEY_HAPTICS, true)) {
+            strength = HapticStrength.OFF.preferenceValue;
+        }
+        HapticStrength normalizedStrength = HapticStrength.fromPreference(strength);
+        b.putBoolean(MotionConfig.KEY_HAPTICS, normalizedStrength.isEnabled());
+        b.putInt(MotionConfig.KEY_HAPTIC_STRENGTH, normalizedStrength.preferenceValue);
+        b.putBoolean(MotionConfig.KEY_CIRCLE_COMPATIBLE,
+                p.getBoolean(MotionConfig.KEY_CIRCLE_COMPATIBLE, true));
         return b;
     }
 
