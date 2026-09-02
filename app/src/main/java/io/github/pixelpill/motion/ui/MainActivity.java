@@ -29,6 +29,7 @@ import io.github.pixelpill.motion.BuildConfig;
 import io.github.pixelpill.motion.settings.HapticStrength;
 import io.github.pixelpill.motion.settings.MotionConfig;
 import io.github.pixelpill.motion.settings.MotionProfile;
+import io.github.pixelpill.motion.settings.SettingsStore;
 
 @SuppressLint("SetTextI18n") // The initial public UI is intentionally English-only.
 public final class MainActivity extends AppCompatActivity {
@@ -43,9 +44,11 @@ public final class MainActivity extends AppCompatActivity {
     @Override protected void onCreate(Bundle state) {
         DynamicColors.applyToActivityIfAvailable(this);
         super.onCreate(state);
-        prefs = getSharedPreferences(MotionConfig.PREFS, 0);
+        SettingsStore.migrateLegacyPreferences(this);
+        prefs = SettingsStore.preferences(this);
         migrateLegacyHapticState();
         setContentView(buildContent());
+        notifyRuntimeSettingsChanged();
     }
 
     private View buildContent() {
@@ -92,7 +95,7 @@ public final class MainActivity extends AppCompatActivity {
 
         body.addView(section("Tools & information"));
         MaterialButton restart = new MaterialButton(this);
-        restart.setText("Restart UI services · Apply now"); restart.setAllCaps(false);
+        restart.setText("Restart UI services · After module update"); restart.setAllCaps(false);
         restart.setIconResource(android.R.drawable.ic_popup_sync);
         restart.setOnClickListener(v -> confirmRestartSystemUi(restart));
         body.addView(restart, match(dp(56)));
@@ -168,8 +171,9 @@ public final class MainActivity extends AppCompatActivity {
                 .setTitle("Compatibility & hook status")
                 .setMessage("Current motion profile: " + profile.displayName
                         + "\nCurrent module haptic: " + haptic.displayName
-                        + "\nSystemUI animation path: stable-bounds draw scaling"
+                        + "\nSystemUI animation path: single-owner stable-bounds drawing"
                         + "\nPixel Fold taskbar path: native Launcher scale"
+                        + "\nSettings startup path: Direct Boot compatible"
                         + "\n\nRequired scope: System UI"
                         + "\nPixel Fold/taskbar scope: Pixel Launcher"
                         + "\nAndroid: "+android.os.Build.VERSION.RELEASE+" (API "+android.os.Build.VERSION.SDK_INT+")"
@@ -259,7 +263,7 @@ public final class MainActivity extends AppCompatActivity {
             } catch (Throwable error) { detail = error.getClass().getSimpleName(); }
             boolean success = ok; String reason = detail;
             runOnUiThread(() -> {
-                button.setEnabled(true); button.setText("Restart UI services · Apply now");
+                button.setEnabled(true); button.setText("Restart UI services · After module update");
                 if (success) Toast.makeText(this, "UI services restarted — settings applied", Toast.LENGTH_LONG).show();
                 else new MaterialAlertDialogBuilder(this).setTitle("Couldn’t restart UI services")
                         .setMessage("Grant PixelPill Motion root access, then try again. You can still apply the module by rebooting the phone." + (reason.isEmpty() ? "" : "\n\nDetails: " + reason))
@@ -269,11 +273,14 @@ public final class MainActivity extends AppCompatActivity {
     }
     private void resetDefaults() { prefs.edit().clear().apply(); changed(); Toast.makeText(this,"Defaults restored",Toast.LENGTH_SHORT).show(); recreate(); }
     private void changed() {
+        notifyRuntimeSettingsChanged();
+        updatePreview();
+    }
+    private void notifyRuntimeSettingsChanged() {
         for (String packageName : new String[]{"com.android.systemui",
                 "com.google.android.apps.nexuslauncher", "com.android.launcher3"}) {
             sendBroadcast(new Intent(MotionConfig.ACTION_CHANGED).setPackage(packageName));
         }
-        updatePreview();
     }
     private void updatePreview() { if(preview!=null) preview.configure(
             getFloat(MotionConfig.KEY_SHRINK_RATIO,.76f),

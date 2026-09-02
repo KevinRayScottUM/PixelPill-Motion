@@ -12,7 +12,8 @@ public final class SettingsProvider extends ContentProvider {
 
     @Override public Bundle call(String method, String arg, Bundle extras) {
         if (!"get_config".equals(method)) return Bundle.EMPTY;
-        SharedPreferences p = requireContext().getSharedPreferences(MotionConfig.PREFS, 0);
+        SettingsStore.migrateLegacyPreferences(requireContext());
+        SharedPreferences p = SettingsStore.preferences(requireContext());
         Bundle b = new Bundle();
         b.putBoolean(MotionConfig.KEY_ENABLED,
                 p.getBoolean(MotionConfig.KEY_ENABLED, true));

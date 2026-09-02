@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.2-rc1 - 2026-09-02
+
+- Removed the cross-process race between Quickstep's remote `SystemUiProxy` animation and the module's SystemUI touch observer by assigning the main gesture handle one SystemUI animation owner.
+- Limited Launcher fallbacks to the actual in-process Pixel Fold stashed/taskbar handle and de-duplicated its native callbacks.
+- Moved settings to Direct Boot-compatible device-protected storage and made runtime refresh asynchronous so a stopped settings app or unavailable provider cannot block a touch/draw frame.
+- Stabilized the current SystemUI handle color for the duration of a pill gesture, then applied only the latest deferred dark-intensity value on return.
+- Added deterministic gesture-cycle tests for duplicate callbacks and interrupted return animations.
+
 ## 1.0.1 - 2026-09-02
 
 - Fixed Motion Profile display and persistence by using one typed profile value from UI through the cross-process runtime configuration.

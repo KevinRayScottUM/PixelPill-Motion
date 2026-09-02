@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.WeakHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
@@ -36,6 +37,7 @@ import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 import io.github.pixelpill.motion.BuildConfig;
+import io.github.pixelpill.motion.runtime.GestureCycle;
 import io.github.pixelpill.motion.settings.HapticStrength;
 import io.github.pixelpill.motion.settings.MotionConfig;
 
@@ -65,10 +67,15 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
             ThreadLocal.withInitial(ArrayDeque::new);
     private static final ThreadLocal<LauncherMotion> LAUNCHER_MOTION = new ThreadLocal<>();
     private static final AtomicBoolean SETTINGS_RECEIVER_REGISTERED = new AtomicBoolean();
+    private static final AtomicBoolean CONFIG_REFRESH_IN_FLIGHT = new AtomicBoolean();
+    private static final AtomicInteger COLOR_DIAGNOSTIC_BUDGET = new AtomicInteger(3);
+    private static final AtomicInteger CONFIG_FAILURE_LOG_BUDGET = new AtomicInteger(3);
+    private static final long CONFIG_REFRESH_INTERVAL_MS = 5000L;
     private static final BroadcastReceiver SETTINGS_RECEIVER = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             if (MotionConfig.ACTION_CHANGED.equals(intent.getAction())) {
                 cacheAt = 0L;
+                refreshConfigAsync(context);
                 verbose("Settings cache invalidated");
             }
         }
@@ -91,7 +98,7 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
         }
     }
 
-    /** The device log proves this class/method exists even where ButtonDispatcher exposed no hook. */
+    /** Owns the SystemUI visual animation regardless of whether Quickstep or SystemUI arrives first. */
     private static int hookSystemUiNativeHandle(ClassLoader loader) {
         int installed = 0;
         for (String name : HANDLE_CLASSES) {
@@ -100,44 +107,57 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
                 @Override protected void beforeHookedMethod(MethodHookParam p) {
                     try {
                         View handle = (View) p.thisObject;
-                        MotionConfig cfg = config(handle.getContext()); if (!cfg.enabled) return;
+                        MotionConfig cfg = config(handle.getContext());
+                        if (!ownsSystemUiAnimation(cfg)) return;
                         boolean down = boolArg(p.args, 0, false);
                         HandleAnimationState state = stateFor(handle);
-                        boolean suppress;
+                        boolean changed = down
+                                ? startModuleGesture(handle, cfg, true)
+                                : finishModuleGesture(handle, cfg);
+                        boolean moduleOwns;
                         synchronized (state) {
-                            suppress = state.moduleOwnsAnimation
-                                    || state.nativePressed == down;
-                            if (!suppress) {
-                                state.nativePressed = down;
-                                state.nativeReleasing = !down;
-                            }
+                            moduleOwns = state.moduleOwnsAnimation;
                         }
-                        if (suppress && canSkipAnimationMethod(p)) {
+                        if ((changed || moduleOwns) && canSkipAnimationMethod(p)) {
                             p.setResult(null);
-                            verbose("SystemUI duplicate native animation suppressed: down=" + down);
+                            verbose("SystemUI native visual routed to module state: down=" + down);
                             return;
                         }
-                        if (cfg.circleCompatible && p.args.length > 1 && p.args[1] instanceof Boolean) {
-                            p.args[1] = true;
-                        }
-                        if (p.args.length > 2 && p.args[2] instanceof Number) {
-                            p.args[2] = (long) Math.max(40,
-                                    down ? cfg.pressDuration : cfg.releaseDuration);
-                        }
-                        if (down) scheduleNativeSafetyRelease(handle, cfg);
-                        verbose("SystemUI call: down=" + down + ", shrink="
-                                + boolArg(p.args, 1, false) + ", duration="
-                                + numberArg(p.args, 2, -1));
                     } catch (Throwable t) { log("SystemUI native call left untouched", t); }
                 }
             }).size();
+            count += XposedBridge.hookAllMethods(type, "setDarkIntensity", new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam p) {
+                    if (p.args.length == 0 || !(p.args[0] instanceof Number)
+                            || !canSkipAnimationMethod(p)) return;
+                    try {
+                        HandleAnimationState state = stateFor((View) p.thisObject);
+                        boolean defer;
+                        synchronized (state) {
+                            defer = state.moduleOwnsAnimation;
+                            if (defer) {
+                                state.pendingDarkIntensity = ((Number) p.args[0]).floatValue();
+                                state.hasPendingDarkIntensity = true;
+                                state.deferredColorUpdates++;
+                            }
+                        }
+                        if (defer) p.setResult(null);
+                    } catch (Throwable t) { log("SystemUI color update left untouched", t); }
+                }
+            }).size();
+            count += XposedBridge.hookAllConstructors(type, new XC_MethodHook() {
+                @Override protected void afterHookedMethod(MethodHookParam p) {
+                    try { primeSettings(((View) p.thisObject).getContext()); }
+                    catch (Throwable t) { verbose("Settings prewarm skipped"); }
+                }
+            }).size();
             installed += count;
-            log("SystemUI native method: " + name + " count=" + count, null);
+            log("SystemUI handle lifecycle: " + name + " count=" + count, null);
         }
         return installed;
     }
 
-    /** Customizes width for this draw only; no View property, Paint, alpha, or color is mutated. */
+    /** Applies only the module's stable-bounds draw scale; no provider or reflection runs per frame. */
     private static int hookSystemUiHandleDrawing(ClassLoader loader) {
         int installed = 0;
         for (String name : HANDLE_CLASSES) {
@@ -147,39 +167,16 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
                     int saveCount = -1;
                     try {
                         View handle = (View) p.thisObject; Canvas canvas = canvasArg(p.args);
-                        MotionConfig cfg = config(handle.getContext());
                         HandleAnimationState state = stateFor(handle);
-                        boolean moduleOwns; boolean nativeReleasing; float moduleScale;
+                        boolean moduleOwns; float moduleScale;
                         synchronized (state) {
                             moduleOwns = state.moduleOwnsAnimation;
-                            nativeReleasing = state.nativeReleasing;
                             moduleScale = state.drawScale;
                         }
-                        if (canvas != null && cfg.enabled && moduleOwns
-                                && handle.getWidth() > 0) {
+                        if (canvas != null && moduleOwns && handle.getWidth() > 0) {
                             saveCount = canvas.save();
                             canvas.scale(clamp(moduleScale, .45f, 1.25f), 1f,
                                     handle.getWidth() / 2f, 0f);
-                        } else if (canvas != null && cfg.enabled && handle.getWidth() > 0) {
-                            boolean shrink = XposedHelpers.getBooleanField(handle, "mShrink");
-                            float progress = XposedHelpers.getFloatField(
-                                    handle, "mPulseAnimationProgress");
-                            if (shrink && progress > 0f) {
-                                float nativeInset = XposedHelpers.getFloatField(
-                                        handle, "mShrinkWidthForAnimation");
-                                float nativeWidth = Math.max(1f,
-                                        handle.getWidth() - 2f * nativeInset * progress);
-                                float desiredRatio = 1f - (1f - ratio(cfg)) * progress;
-                                if (nativeReleasing && cfg.overshoot > 0f) {
-                                    desiredRatio += cfg.overshoot
-                                            * (float) Math.sin(Math.PI * (1f - progress));
-                                }
-                                float desiredWidth = handle.getWidth()
-                                        * Math.max(.45f, desiredRatio);
-                                float drawScale = clamp(desiredWidth / nativeWidth, .55f, 1.35f);
-                                saveCount = canvas.save();
-                                canvas.scale(drawScale, 1f, handle.getWidth() / 2f, 0f);
-                            }
                         }
                     } catch (Throwable t) { log("SystemUI draw customization skipped", t); }
                     CANVAS_SAVES.get().push(saveCount);
@@ -213,7 +210,7 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
                     if (action == MotionEvent.ACTION_DOWN) {
                         if (!cfg.enabled || cfg.longPressOnly || !cfg.animateTouch
                                 || !insideHandle(event, handle)) return;
-                        if (startModuleGesture(handle, cfg)) verbose("SystemUI ACTION_DOWN");
+                        if (startModuleGesture(handle, cfg, false)) verbose("SystemUI ACTION_DOWN");
                     } else if ((action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL)
                             && finishModuleGesture(handle, cfg)) {
                         verbose("SystemUI ACTION_" + (action == MotionEvent.ACTION_UP
@@ -248,8 +245,15 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
                                         p.thisObject, "mStashedHandleView");
                                 MotionConfig cfg = config(handle.getContext()); if (!cfg.enabled) return;
                                 boolean down = boolArg(p.args, 0, false);
-                                if (cfg.circleCompatible && p.args.length > 1
-                                        && p.args[1] instanceof Boolean) p.args[1] = true;
+                                Boolean previous = LAUNCHER_PRESSED.get(p.thisObject);
+                                if (previous != null && previous == down
+                                        && canSkipAnimationMethod(p)) {
+                                    p.setResult(null);
+                                    verbose("Duplicate local taskbar animation suppressed");
+                                    return;
+                                }
+                                LAUNCHER_PRESSED.put(p.thisObject, down);
+                                if (down) performModuleHaptic(handle.getContext(), handle, cfg);
                                 if (p.args.length > 2 && p.args[2] instanceof Number) {
                                     p.args[2] = (long) Math.max(40,
                                             down ? cfg.pressDuration : cfg.releaseDuration);
@@ -285,15 +289,37 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
             installed += count;
             log("Launcher scale methods=" + count, null);
         } else log("Launcher handle class missing", null);
+        installed += hookLauncherHapticHint(loader);
         installed += hookLauncherInputHandler(loader);
         installed += hookLauncherInputConsumer(loader);
         return installed;
     }
 
-    /**
-     * Pixel builds can disable the AOSP animation through DeviceConfig. These callbacks are still
-     * reached for every valid nav-handle press, so explicitly invoke the NavHandle interface here.
-     */
+    /** Replaces only the initial native hint when a module-owned level is enabled. */
+    private static int hookLauncherHapticHint(ClassLoader loader) {
+        Class<?> type = XposedHelpers.findClassIfExists(
+                "com.android.quickstep.util.ContextualSearchHapticManager", loader);
+        if (type == null) return 0;
+        int count = XposedBridge.hookAllMethods(type, "vibrateForSearchHint", new XC_MethodHook() {
+            @Override protected void beforeHookedMethod(MethodHookParam p) {
+                if (!canSkipAnimationMethod(p)) return;
+                try {
+                    Context context = contextFromObject(p.thisObject);
+                    if (context == null) return;
+                    MotionConfig cfg = config(context);
+                    if (cfg.enabled && cfg.haptics
+                            && cfg.hapticStrength != HapticStrength.OFF) {
+                        p.setResult(null);
+                        verbose("Native search hint replaced by module press haptic");
+                    }
+                } catch (Throwable t) { log("Launcher search hint left untouched", t); }
+            }
+        }).size();
+        log("Launcher haptic hint methods=" + count, null);
+        return count;
+    }
+
+    /** Fallback only for the in-process stashed taskbar; remote SystemUiProxy is never invoked. */
     private static int hookLauncherInputHandler(ClassLoader loader) {
         Class<?> handler = XposedHelpers.findClassIfExists(
                 "com.android.quickstep.inputconsumers.NavHandleLongPressHandler", loader);
@@ -305,7 +331,9 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
             @Override protected void afterHookedMethod(MethodHookParam p) {
                 if (p.hasThrowable() || p.args.length == 0 || p.args[0] == null) return;
                 try {
-                     Context context = launcherContext(p.args[0]); if (context == null) return;
+                    View localHandle = launcherHandleView(p.args[0]);
+                    if (localHandle == null) return;
+                    Context context = localHandle.getContext();
                     MotionConfig cfg = config(context); if (!cfg.enabled || cfg.longPressOnly
                             || !cfg.animateTouch) return;
                     driveLauncherNavHandle(p.args[0], true, cfg);
@@ -317,7 +345,9 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
             @Override protected void afterHookedMethod(MethodHookParam p) {
                 if (p.args.length == 0 || p.args[0] == null) return;
                 try {
-                    Context context = launcherContext(p.args[0]); if (context == null) return;
+                    View localHandle = launcherHandleView(p.args[0]);
+                    if (localHandle == null) return;
+                    Context context = localHandle.getContext();
                     MotionConfig cfg = config(context);
                     driveLauncherNavHandle(p.args[0], false, cfg);
                     verbose("Launcher input: touch finished");
@@ -342,7 +372,9 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
                     MotionEvent event = motionArg(p.args); if (event == null) return;
                     Object navHandle = XposedHelpers.getObjectField(p.thisObject, "mNavHandle");
                     if (navHandle == null) return;
-                    Context context = launcherContext(navHandle); if (context == null) return;
+                    View localHandle = launcherHandleView(navHandle);
+                    if (localHandle == null) return;
+                    Context context = localHandle.getContext();
                     MotionConfig cfg = config(context); if (!cfg.enabled) return;
                     int action = event.getActionMasked();
                     if (action == MotionEvent.ACTION_DOWN) {
@@ -368,36 +400,16 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
     }
 
     private static void driveLauncherNavHandle(Object navHandle, boolean down, MotionConfig cfg) {
+        View localHandle = launcherHandleView(navHandle);
+        if (localHandle == null) return;
         Boolean old = LAUNCHER_PRESSED.get(navHandle); if (old != null && old == down) return;
-        LAUNCHER_PRESSED.put(navHandle, down);
         invokeLauncherNavHandle(navHandle, down, cfg);
-        if (down) performModuleHaptic(launcherContext(navHandle),
-                launcherHandleView(navHandle), cfg);
+        LAUNCHER_PRESSED.put(navHandle, down);
     }
 
     private static void invokeLauncherNavHandle(Object navHandle, boolean down, MotionConfig cfg) {
         long duration = Math.max(40, down ? cfg.pressDuration : cfg.releaseDuration);
         XposedHelpers.callMethod(navHandle, "animateNavBarLongPress", down, true, duration);
-    }
-
-    private static Context launcherContext(Object navHandle) {
-        if (navHandle instanceof View) return ((View) navHandle).getContext();
-        try {
-            Object view = XposedHelpers.getObjectField(navHandle, "mStashedHandleView");
-            if (view instanceof View) return ((View) view).getContext();
-        } catch (Throwable ignored) {}
-        for (String field : new String[]{"mContext", "mApplicationContext"}) {
-            try {
-                Object value = XposedHelpers.getObjectField(navHandle, field);
-                if (value instanceof Context) return (Context) value;
-            } catch (Throwable ignored) {}
-        }
-        try {
-            Class<?> activityThread = XposedHelpers.findClass("android.app.ActivityThread", null);
-            Object app = XposedHelpers.callStaticMethod(activityThread, "currentApplication");
-            if (app instanceof Context) return (Context) app;
-        } catch (Throwable ignored) {}
-        return null;
     }
 
     private static View launcherHandleView(Object navHandle) {
@@ -408,6 +420,17 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
         } catch (Throwable ignored) {
             return null;
         }
+    }
+
+    private static Context contextFromObject(Object object) {
+        if (object instanceof View) return ((View) object).getContext();
+        for (String field : new String[]{"context", "mContext", "mApplicationContext"}) {
+            try {
+                Object value = XposedHelpers.getObjectField(object, field);
+                if (value instanceof Context) return (Context) value;
+            } catch (Throwable ignored) {}
+        }
+        return null;
     }
 
     /** Delivers one touch-class haptic without borrowing the native long-press semantic event. */
@@ -465,15 +488,19 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
      * Starts exactly one module-owned draw animation for an ordinary gesture. The NavigationHandle
      * View bounds, alpha, visibility, Paint, dark intensity, and navbar background remain untouched.
      */
-    private static boolean startModuleGesture(View handle, MotionConfig cfg) {
+    private static boolean startModuleGesture(View handle, MotionConfig cfg,
+            boolean nativeCallback) {
         HandleAnimationState state = stateFor(handle);
         int gestureToken;
         synchronized (state) {
-            if (state.gestureActive) return false;
-            state.gestureActive = true;
+            gestureToken = state.gestureCycle.beginPress(!nativeCallback);
+            if (gestureToken < 0) return false;
+            if (!state.moduleOwnsAnimation) {
+                state.hasPendingDarkIntensity = false;
+                state.deferredColorUpdates = 0;
+            }
             state.moduleOwnsAnimation = true;
-            state.phase = AnimationPhase.PRESSING;
-            gestureToken = ++state.gestureToken;
+            state.activeConfig = cfg;
         }
         animateModuleScale(handle, state, ratio(cfg), cfg.pressDuration, false, cfg.overshoot);
         performModuleHaptic(handle.getContext(), handle, cfg);
@@ -483,12 +510,13 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
 
     private static boolean finishModuleGesture(View handle, MotionConfig cfg) {
         HandleAnimationState state = stateFor(handle);
+        MotionConfig animationConfig;
         synchronized (state) {
-            if (!state.gestureActive) return false;
-            state.gestureActive = false;
-            state.phase = AnimationPhase.RETURNING;
+            if (!state.gestureCycle.beginReturn()) return false;
+            animationConfig = state.activeConfig == null ? cfg : state.activeConfig;
         }
-        animateModuleScale(handle, state, 1f, cfg.releaseDuration, true, cfg.overshoot);
+        animateModuleScale(handle, state, 1f, animationConfig.releaseDuration, true,
+                animationConfig.overshoot);
         return true;
     }
 
@@ -520,18 +548,31 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
         });
         animator.addListener(new AnimatorListenerAdapter() {
             @Override public void onAnimationEnd(Animator animation) {
+                Float pendingDarkIntensity = null;
+                int deferredColorUpdates = 0;
                 synchronized (state) {
                     if (state.animatorToken != token) return;
                     state.animator = null;
-                    if (returning && !state.gestureActive) {
+                    if (returning && !state.gestureCycle.isActive()) {
                         state.drawScale = 1f;
                         state.moduleOwnsAnimation = false;
-                        state.phase = AnimationPhase.IDLE;
-                    } else if (!returning && state.gestureActive) {
-                        state.phase = AnimationPhase.PRESSED;
+                        state.activeConfig = null;
+                        state.gestureCycle.markIdle();
+                        if (state.hasPendingDarkIntensity) {
+                            pendingDarkIntensity = state.pendingDarkIntensity;
+                            deferredColorUpdates = state.deferredColorUpdates;
+                            state.hasPendingDarkIntensity = false;
+                            state.deferredColorUpdates = 0;
+                        }
+                    } else if (!returning && state.gestureCycle.isActive()) {
+                        state.gestureCycle.markPressed();
                     }
                 }
                 handle.invalidate();
+                if (pendingDarkIntensity != null) {
+                    applyDeferredDarkIntensity(handle, pendingDarkIntensity,
+                            deferredColorUpdates);
+                }
             }
         });
         synchronized (state) {
@@ -546,25 +587,23 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
             try {
                 HandleAnimationState state = stateFor(handle);
                 synchronized (state) {
-                    if (!state.gestureActive || state.gestureToken != gestureToken) return;
+                    if (!state.gestureCycle.isActive(gestureToken)) return;
                 }
                 finishModuleGesture(handle, config(handle.getContext()));
             } catch (Throwable t) { log("SystemUI module safety release skipped", t); }
-        }, 1600L);
+        }, 2500L);
     }
 
-    private static void scheduleNativeSafetyRelease(View handle, MotionConfig cfg) {
-        long delay = Math.max(1400L, cfg.pressDuration + 1000L);
-        handle.postDelayed(() -> {
+    private static void applyDeferredDarkIntensity(View handle, float intensity, int updateCount) {
+        handle.post(() -> {
             try {
-                HandleAnimationState state = stateFor(handle);
-                synchronized (state) {
-                    if (!state.nativePressed || state.moduleOwnsAnimation) return;
+                XposedHelpers.callMethod(handle, "setDarkIntensity", intensity);
+                if (updateCount > 1 && COLOR_DIAGNOSTIC_BUDGET.getAndDecrement() > 0) {
+                    log("Stabilized " + updateCount
+                            + " dark-intensity updates during one pill gesture", null);
                 }
-                XposedHelpers.callMethod(handle, "animateLongPress", false, true,
-                        (long) Math.max(40, config(handle.getContext()).releaseDuration));
-            } catch (Throwable t) { log("SystemUI native safety release skipped", t); }
-        }, delay);
+            } catch (Throwable t) { log("Deferred SystemUI color update skipped", t); }
+        });
     }
 
     private static boolean insideHandle(MotionEvent e, View handle) {
@@ -591,13 +630,44 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
     }
 
     private static MotionConfig config(Context context) {
-        ensureSettingsReceiver(context);
-        long now = SystemClock.uptimeMillis(); if (now - cacheAt < 1200) return cached;
-        try {
-            Bundle b = context.getContentResolver().call(SETTINGS, "get_config", null, null);
-            cached = MotionConfig.from(b); cacheAt = now;
-        } catch (Throwable t) { cacheAt = now; log("settings unavailable; defaults retained", t); }
+        primeSettings(context);
         return cached;
+    }
+
+    private static boolean ownsSystemUiAnimation(MotionConfig config) {
+        return config.enabled && config.animateTouch && !config.longPressOnly;
+    }
+
+    private static void primeSettings(Context context) {
+        if (context == null) return;
+        ensureSettingsReceiver(context);
+        if (cacheAt == 0L
+                || SystemClock.uptimeMillis() - cacheAt >= CONFIG_REFRESH_INTERVAL_MS) {
+            refreshConfigAsync(context);
+        }
+    }
+
+    /** Never blocks a touch or draw frame on starting the settings app/provider process. */
+    private static void refreshConfigAsync(Context context) {
+        if (context == null || !CONFIG_REFRESH_IN_FLIGHT.compareAndSet(false, true)) return;
+        Context application = context.getApplicationContext();
+        Context queryContext = application == null ? context : application;
+        Thread refreshThread = new Thread(() -> {
+            try {
+                Bundle bundle = queryContext.getContentResolver().call(
+                        SETTINGS, "get_config", null, null);
+                cached = MotionConfig.from(bundle);
+            } catch (Throwable t) {
+                if (CONFIG_FAILURE_LOG_BUDGET.getAndDecrement() > 0) {
+                    log("settings unavailable; non-blocking defaults retained", t);
+                }
+            } finally {
+                cacheAt = SystemClock.uptimeMillis();
+                CONFIG_REFRESH_IN_FLIGHT.set(false);
+            }
+        }, "PixelPillConfigRefresh");
+        refreshThread.setDaemon(true);
+        refreshThread.start();
     }
 
     private static void ensureSettingsReceiver(Context context) {
@@ -643,7 +713,6 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
     private static MotionEvent motionArg(Object[] args) { for (Object a : args) if (a instanceof MotionEvent) return (MotionEvent) a; return null; }
     private static Canvas canvasArg(Object[] args) { for (Object a : args) if (a instanceof Canvas) return (Canvas) a; return null; }
     private static boolean boolArg(Object[] args, int i, boolean fallback) { return args.length > i && args[i] instanceof Boolean ? (Boolean) args[i] : fallback; }
-    private static long numberArg(Object[] args, int i, long fallback) { return args.length > i && args[i] instanceof Number ? ((Number) args[i]).longValue() : fallback; }
     private static void verbose(String message) {
         if (BuildConfig.VERBOSE_HOOK_LOGS) log(message, null);
     }
@@ -655,16 +724,15 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
         final MotionConfig config; final boolean down;
         LauncherMotion(MotionConfig config, boolean down) { this.config = config; this.down = down; }
     }
-    private enum AnimationPhase { IDLE, PRESSING, PRESSED, RETURNING }
     private static final class HandleAnimationState {
         ValueAnimator animator;
+        MotionConfig activeConfig;
+        final GestureCycle gestureCycle = new GestureCycle();
         float drawScale = 1f;
-        boolean gestureActive;
         boolean moduleOwnsAnimation;
-        boolean nativePressed;
-        boolean nativeReleasing;
-        int gestureToken;
+        boolean hasPendingDarkIntensity;
+        float pendingDarkIntensity;
+        int deferredColorUpdates;
         int animatorToken;
-        AnimationPhase phase = AnimationPhase.IDLE;
     }
 }
