@@ -4,10 +4,12 @@
 
 1. 安装 APK。
 2. 在 Vector 或 LSPosed 的模块页启用 **PixelPill Motion**。
-3. 勾选 **系统界面 / System UI (`com.android.systemui`)**。Pixel Fold 还必须勾选 **Pixel Launcher (`com.google.android.apps.nexuslauncher`)**，因为展开状态/收起任务栏的白条由 Launcher 绘制。
+3. 勾选 **系统界面 / System UI (`com.android.systemui`)**。Pixel Fold 还必须勾选 **Pixel Launcher (`com.google.android.apps.nexuslauncher`)**，因为 Android 17 的部分折叠/任务栏状态会由 Launcher 绘制当前小白条。
 4. 首次启用模块后完整重启手机；以后修改设置时，可以点击模块内的 **Restart UI services · Apply now**，授权 Root 后同时刷新 SystemUI 与 Pixel Launcher。
 5. 打开模块设置。默认 AOSP-like 参数为：按下宽度 76%、按下 120 ms、回弹 190 ms、overshoot 8%、轻触觉。
 6. 先测试普通点按，再长按确认 Circle to Search 正常出现。
+
+从 v1.0.3 起，Pixel Fold 外屏会使用一个不接收触摸的独立连续显示层来绘制小白条，避免新 App 的导航 Insets 动画层在松手瞬间隐藏原生像素。原生小白条 View 仍保持连接、可见并负责触摸和长按，因此 Circle to Search 的系统输入链不会被替换。打开新的 App 不需要再次重启 SystemUI。
 
 ## 安全恢复
 

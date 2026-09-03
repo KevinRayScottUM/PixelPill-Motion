@@ -4,6 +4,8 @@ val releaseStoreFile = providers.environmentVariable("PIXELPILL_RELEASE_STORE_FI
 val releaseStorePassword = providers.environmentVariable("PIXELPILL_RELEASE_STORE_PASSWORD").orNull
 val releaseKeyAlias = providers.environmentVariable("PIXELPILL_RELEASE_KEY_ALIAS").orNull
 val releaseKeyPassword = providers.environmentVariable("PIXELPILL_RELEASE_KEY_PASSWORD").orNull
+val diagnosticHookLogs = providers.gradleProperty("pixelpillDiagnosticLogs")
+    .map(String::toBoolean).orElse(false)
 
 android {
     namespace = "io.github.pixelpill.motion"
@@ -12,8 +14,8 @@ android {
         applicationId = "io.github.pixelpill.motion"
         minSdk = 33
         targetSdk = 37
-        versionCode = 9
-        versionName = "1.0.2-rc2"
+        versionCode = 10
+        versionName = "1.0.3"
     }
     signingConfigs {
         if (releaseStoreFile != null && releaseStorePassword != null
@@ -36,8 +38,8 @@ android {
             buildConfigField("boolean", "VERBOSE_HOOK_LOGS", "true")
         }
         release {
-            buildConfigField("String", "BUILD_CHANNEL", "\"release-candidate\"")
-            buildConfigField("boolean", "VERBOSE_HOOK_LOGS", "false")
+            buildConfigField("String", "BUILD_CHANNEL", "\"stable\"")
+            buildConfigField("boolean", "VERBOSE_HOOK_LOGS", diagnosticHookLogs.get().toString())
             isMinifyEnabled = false
             isShrinkResources = false
             signingConfig = signingConfigs.findByName("release")

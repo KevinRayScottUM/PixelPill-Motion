@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.3 - 2026-09-03
+
+- Fixed the Android 17 Pixel Fold outer-display pill flash that returned for every newly opened application until SystemUI was restarted.
+- Moved the Fold taskbar pill pixels to a small Launcher-owned navigation-panel continuity surface that is independent of each application's transient navigation Insets animation leash.
+- Kept the native `StashedHandleView` attached, visible, and fully available to Quickstep for touch handling, long-press recognition, region state, and Circle to Search; only its duplicate drawable pixels are transparent while the continuity surface is active.
+- Bound animation state to the current attached handle and valid `ViewRoot`/`SurfaceControl`, with detach cleanup that cancels animators, removes the continuity window, restores native drawing, and discards stale state.
+- Synchronized release with Quickstep's real sampling/lifecycle callback and moved luma sampling above the complete taskbar surface to prevent self-sampling black/white feedback. No app-specific rules, guessed delay, or automatic SystemUI restart is used.
+- Added opt-in lifecycle, handle, surface, animation, and navigation-color diagnostics for future Pixel OTA investigations; stable builds keep verbose diagnostics disabled.
+
 ## 1.0.2-rc2 - 2026-09-02
 
 - Removed all SystemUI `NavigationHandle.onDraw` interception and per-frame Canvas invalidation.

@@ -172,7 +172,7 @@ public final class MainActivity extends AppCompatActivity {
                 .setMessage("Current motion profile: " + profile.displayName
                         + "\nCurrent module haptic: " + haptic.displayName
                         + "\nSystemUI animation path: single-owner RenderNode scaleX"
-                        + "\nPixel Fold taskbar path: native Launcher scale"
+                        + "\nPixel Fold taskbar path: independent visual surface + native input"
                         + "\nSettings startup path: Direct Boot compatible"
                         + "\n\nRequired scope: System UI"
                         + "\nPixel Fold/taskbar scope: Pixel Launcher"

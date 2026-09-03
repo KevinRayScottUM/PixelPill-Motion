@@ -2,7 +2,8 @@
 
 PixelPill Motion is a focused Vector / LSPosed module that gives the Pixel gesture-navigation handle a natural press, shrink, and spring-back response while leaving Android's navigation and Circle to Search gesture ownership untouched.
 
-Current public release: **v1.0.1** (`versionCode` 7).
+Current stable source: **v1.0.3** (`versionCode` 10). The v1.0.3 artifacts are being
+prepared locally and are not published by this change.
 
 ```text
 Touch / long-press
@@ -22,7 +23,8 @@ PixelPill Motion changes the handle's visual interaction; it does not replace An
 
 - AOSP-like default motion: 76% pressed width, 120 ms press, 190 ms release, 8% overshoot.
 - AOSP-like, Pixel subtle, Spring, and Custom profiles.
-- Stable-bounds SystemUI drawing that prevents duplicate press animators and third-party-app navbar flashing.
+- A separate Pixel Fold continuity surface that remains visible across per-app navigation Insets leash transitions.
+- Per-handle animation ownership and lifecycle cleanup that prevent stale roots, duplicate animators, and third-party-app navbar flashing.
 - Immediate touch motion or long-press-only behavior.
 - Adjustable width, timing, overshoot, and persisted Off/Light/Medium/Strong haptic levels.
 - Material 3 UI with dynamic color, light/dark themes, and an interactive preview.
@@ -39,9 +41,9 @@ PixelPill Motion changes the handle's visual interaction; it does not replace An
 
 ## Install and activate
 
-1. Download and install `PixelPill-Motion-v1.0.1-release.apk` from GitHub Releases.
+1. Download and install `PixelPill-Motion-v1.0.3-release.apk` from the release assets once v1.0.3 is published.
 2. Open Vector, LSPosed, or another compatible Xposed manager and enable **PixelPill Motion**.
-3. Scope the module to **System UI** (`com.android.systemui`). On the tested Pixel Fold setup, also select **Pixel Launcher** (`com.google.android.apps.nexuslauncher`) because the unfolded/stashed taskbar handle is rendered there.
+3. Scope the module to **System UI** (`com.android.systemui`). On the tested Pixel Fold setup, also select **Pixel Launcher** (`com.google.android.apps.nexuslauncher`) because Android 17 can route the active gesture handle through Launcher's taskbar implementation.
 4. Reboot the phone. For later settings changes, the app's **Restart UI services · Apply now** action can refresh SystemUI and Pixel Launcher after root access is granted; a full reboot remains the safest fallback.
 5. Test an ordinary press, then long-press the gesture handle and confirm Circle to Search still starts normally on your installed Pixel build.
 
@@ -60,9 +62,32 @@ The app has a minimum SDK of 33, but that does not imply verified hook compatibi
 
 ## Implementation
 
-For ordinary presses, the module observes `NavigationBarView` touch callbacks and drives one per-handle `IDLE → PRESSING → PRESSED → RETURNING` state machine. The rendered width is changed only inside a `NavigationHandle.onDraw()` Canvas save/restore pair, and an interrupted animation continues from its current rendered scale. Duplicate callbacks and duplicate native `animateLongPress(...)` visual requests are suppressed while the module owns the animation.
+For SystemUI-owned handles, the module observes navigation touch callbacks and drives one
+per-handle `IDLE → PRESSING → PRESSED → RETURNING` state machine. Width changes use a
+centered `View.scaleX` RenderNode property, so layout bounds remain stable and an interrupted
+animation reverses from its current scale.
 
-The hook does **not** consume `MotionEvent`, replace the SystemUI long-click listener, alter Circle to Search arguments, resize the handle View, or mutate alpha, color, dark intensity, visibility, navbar background, or Region Sampling. It skips only redundant void visual-animation calls; the original SystemUI gesture and long-press pipelines continue normally. The setting provider is read-only and exposes only non-sensitive animation preferences.
+On the tested Android 17 Pixel Fold outer display, the active pill is a Pixel Launcher
+`StashedHandleView` inside a taskbar navigation surface. A newly opened app can temporarily
+reparent that surface under an `insets_animation` leash that drops the native pill pixels at
+ACTION_UP even though the Java View is still attached, visible, and opaque. v1.0.3 therefore
+draws the same pill in a small, non-touchable Launcher-owned navigation-panel continuity
+window outside the per-app leash. The original View remains attached and visible; only its
+duplicate background drawable is transparent, so Quickstep continues to own hit testing,
+the long-press recognizer, and Circle to Search. The overlay mirrors the current handle's
+scale, visibility, alpha, position, display, and sampled light/dark color.
+
+Every animation is resolved against the currently attached handle and a valid
+`ViewRoot`/`SurfaceControl`. State is weakly keyed by the handle. Detach cleanup cancels
+animators, removes the continuity window, restores native drawing, and drops the old state.
+The luma sample band is placed above the complete taskbar surface so it cannot sample the
+pill itself during an Insets transition. Release waits for Quickstep's actual sampling-state
+callback—there is no package allowlist, arbitrary delay, automatic SystemUI restart, or
+per-app navbar recreation.
+
+The hook does **not** consume `MotionEvent`, replace the long-click listener, or alter Circle
+to Search arguments. The setting provider is read-only and exposes only non-sensitive
+animation preferences.
 
 Relevant upstream references:
 
@@ -98,7 +123,7 @@ The Xposed API 82 jar is compile-only and is not packaged in the APK. Its SHA-25
 
 - Private Pixel SystemUI details can change with any OTA; a device log is needed to add a new fallback.
 - The app cannot authoritatively query whether a framework injected its hook. Use Vector/LSPosed scope state and the `PixelPillMotion` framework log tag.
-- The v1.0.1 animation path was prepared from Pixel Fold reports covering launcher and ordinary-app rendering differences. Recheck press/release motion and Circle to Search after each Pixel OTA.
+- The v1.0.3 continuity path was validated by physical observation on a first-generation Pixel Fold outer display across newly opened apps without another SystemUI restart. Recheck press/release motion and Circle to Search after each Pixel OTA.
 - Folded/unfolded and transient-navigation states can use different handle instances; each discovered instance is animated independently.
 
 ## Privacy and license
