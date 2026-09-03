@@ -2,8 +2,7 @@
 
 PixelPill Motion is a focused Vector / LSPosed module that gives the Pixel gesture-navigation handle a natural press, shrink, and spring-back response while leaving Android's navigation and Circle to Search gesture ownership untouched.
 
-Current stable source: **v1.0.3** (`versionCode` 10). The v1.0.3 artifacts are being
-prepared locally and are not published by this change.
+Current public release: **v1.0.3** (`versionCode` 10).
 
 ```text
 Touch / long-press
@@ -41,7 +40,7 @@ PixelPill Motion changes the handle's visual interaction; it does not replace An
 
 ## Install and activate
 
-1. Download and install `PixelPill-Motion-v1.0.3-release.apk` from the release assets once v1.0.3 is published.
+1. Download and install `PixelPill-Motion-v1.0.3-release.apk` from GitHub Releases.
 2. Open Vector, LSPosed, or another compatible Xposed manager and enable **PixelPill Motion**.
 3. Scope the module to **System UI** (`com.android.systemui`). On the tested Pixel Fold setup, also select **Pixel Launcher** (`com.google.android.apps.nexuslauncher`) because Android 17 can route the active gesture handle through Launcher's taskbar implementation.
 4. Reboot the phone. For later settings changes, the app's **Restart UI services · Apply now** action can refresh SystemUI and Pixel Launcher after root access is granted; a full reboot remains the safest fallback.
