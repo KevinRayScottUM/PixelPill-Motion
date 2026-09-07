@@ -1,8 +1,10 @@
-# PixelPill Motion v1.0.3
+# PixelPill Motion v1.0.2
 
-PixelPill Motion v1.0.3 is the stable Pixel Fold outer-display flicker fix. It addresses
+PixelPill Motion v1.0.2 is the stable Pixel Fold outer-display interaction fix. It addresses
 the reproducible case where a newly opened application flashed the gesture pill black/white
-or made it disappear briefly at ACTION_UP until SystemUI was restarted.
+or made it disappear briefly at ACTION_UP until SystemUI was restarted. It also fixes the
+application-only feedback delay and the case where the pill remained shrunken after release,
+especially with an IME, app transition, or battery saver active.
 
 ## Verified fault model
 
@@ -29,7 +31,7 @@ faulty outer-display taskbar/leash composition sequence.
 
 ## Stable architecture
 
-For the Pixel Launcher taskbar path, v1.0.3 creates one small
+For the Pixel Launcher taskbar path, v1.0.2 creates one small
 `TYPE_NAVIGATION_BAR_PANEL` continuity window for the current active handle. It is owned by
 Launcher but is not parented to an individual application's transient navigation Insets leash.
 The window is non-focusable and non-touchable and draws only an equivalent rounded pill.
@@ -41,10 +43,25 @@ animation routing, native long-press recognition, haptics, navigation gestures, 
 Search. The continuity pill mirrors the current native position, size, alpha, visibility,
 light/dark color, and horizontal animation scale.
 
-Release begins only after Quickstep's real sampling/lifecycle state callback reports a stable
-taskbar state. This is callback synchronization, not a guessed delay. The luma sampling band
-is moved above the full taskbar surface so the temporary Insets composition cannot cause the
-pill to sample its own pixels and oscillate black/white. No app package is special-cased.
+Release follows Quickstep's native `NavHandleLongPressHandler.onTouchFinished` lifecycle and
+starts immediately after native touch completion. An input-consumer after-hook performs the same
+return only when a platform build omits the handler callback. The release path does not depend on
+optional luma sampling, app-transition, top-task, or taskbar-hidden state. The luma sampling band
+is moved above the full taskbar surface so the temporary Insets composition cannot cause the pill
+to sample its own pixels and oscillate black/white. No app package is special-cased.
+
+## ACTION_UP recovery correction
+
+Earlier testing exposed a second lifecycle error: the return animation had been held until
+`updateSamplingState()` reported a compound "stable" state. Luma sampling may legitimately be
+disabled in an application, with the keyboard visible, during a transition, or under power-save
+conditions. It is an appearance optimization, not an acknowledgement that touch input finished.
+If no later callback satisfied the compound predicate, the pill remained at scale `0.76`.
+
+The corrected state machine leaves the pressed flag active while Quickstep processes
+`ACTION_UP`/`ACTION_CANCEL`, lets the native long-press handler complete, and then returns directly
+to scale `1.0`. This removes both the app-only delay and the indefinite shrunken state without a
+timeout, per-app rule, or SystemUI restart.
 
 ## Lifecycle and cleanup
 
@@ -71,15 +88,19 @@ pill to sample its own pixels and oscillate black/white. No app package is speci
 
 ## Physical acceptance
 
-On the connected first-generation Pixel Fold running Android 17, the owner confirmed the
-folded outer-display scenario across newly opened applications without another SystemUI
-restart: press and release remained smooth and the previous black/white/disappearance flash
-did not return. The inner display was not affected by the original bug.
+On the connected first-generation Pixel Fold running Android 17, the folded outer-display path
+was verified across Pixel Launcher, Chrome, QQ, WeChat, Settings, Taobao, and an app with the IME
+visible. Press event delivery measured 4–8 ms in the settled Launcher/Chrome/QQ/WeChat/Settings
+matrix, while recovery began 0–3 ms after `ACTION_UP`, including cases with luma sampling disabled.
+
+With battery saver active, Chrome, QQ, and Settings each completed five rapid tap cycles. All 15
+cycles had matching down/up/recovery transitions and returned to full width. A one-second long
+press launched Google's Circle to Search entry point and returned to the originating app on Back.
 
 ## Build identity
 
 - Package: `io.github.pixelpill.motion`
-- Version name: `1.0.3`
+- Version name: `1.0.2`
 - Version code: `10`
 - Min SDK: `33`
 - Target/compile SDK: `37`

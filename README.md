@@ -2,7 +2,7 @@
 
 PixelPill Motion is a focused Vector / LSPosed module that gives the Pixel gesture-navigation handle a natural press, shrink, and spring-back response while leaving Android's navigation and Circle to Search gesture ownership untouched.
 
-Current public release: **v1.0.3** (`versionCode` 10).
+Current public release: **v1.0.2** (`versionCode` 10).
 
 ```text
 Touch / long-press
@@ -40,7 +40,7 @@ PixelPill Motion changes the handle's visual interaction; it does not replace An
 
 ## Install and activate
 
-1. Download and install `PixelPill-Motion-v1.0.3-release.apk` from GitHub Releases.
+1. Download and install `PixelPill-Motion-v1.0.2-release.apk` from GitHub Releases.
 2. Open Vector, LSPosed, or another compatible Xposed manager and enable **PixelPill Motion**.
 3. Scope the module to **System UI** (`com.android.systemui`). On the tested Pixel Fold setup, also select **Pixel Launcher** (`com.google.android.apps.nexuslauncher`) because Android 17 can route the active gesture handle through Launcher's taskbar implementation.
 4. Reboot the phone. For later settings changes, the app's **Restart UI services · Apply now** action can refresh SystemUI and Pixel Launcher after root access is granted; a full reboot remains the safest fallback.
@@ -69,7 +69,7 @@ animation reverses from its current scale.
 On the tested Android 17 Pixel Fold outer display, the active pill is a Pixel Launcher
 `StashedHandleView` inside a taskbar navigation surface. A newly opened app can temporarily
 reparent that surface under an `insets_animation` leash that drops the native pill pixels at
-ACTION_UP even though the Java View is still attached, visible, and opaque. v1.0.3 therefore
+ACTION_UP even though the Java View is still attached, visible, and opaque. v1.0.2 therefore
 draws the same pill in a small, non-touchable Launcher-owned navigation-panel continuity
 window outside the per-app leash. The original View remains attached and visible; only its
 duplicate background drawable is transparent, so Quickstep continues to own hit testing,
@@ -80,9 +80,11 @@ Every animation is resolved against the currently attached handle and a valid
 `ViewRoot`/`SurfaceControl`. State is weakly keyed by the handle. Detach cleanup cancels
 animators, removes the continuity window, restores native drawing, and drops the old state.
 The luma sample band is placed above the complete taskbar surface so it cannot sample the
-pill itself during an Insets transition. Release waits for Quickstep's actual sampling-state
-callback—there is no package allowlist, arbitrary delay, automatic SystemUI restart, or
-per-app navbar recreation.
+pill itself during an Insets transition. Release starts from Quickstep's native
+`NavHandleLongPressHandler.onTouchFinished` lifecycle, with an input-consumer after-hook as a
+deterministic compatibility fallback. It never waits for optional luma sampling or app-transition
+state—there is no package allowlist, arbitrary delay, automatic SystemUI restart, or per-app
+navbar recreation.
 
 The hook does **not** consume `MotionEvent`, replace the long-click listener, or alter Circle
 to Search arguments. The setting provider is read-only and exposes only non-sensitive
@@ -122,7 +124,7 @@ The Xposed API 82 jar is compile-only and is not packaged in the APK. Its SHA-25
 
 - Private Pixel SystemUI details can change with any OTA; a device log is needed to add a new fallback.
 - The app cannot authoritatively query whether a framework injected its hook. Use Vector/LSPosed scope state and the `PixelPillMotion` framework log tag.
-- The v1.0.3 continuity path was validated by physical observation on a first-generation Pixel Fold outer display across newly opened apps without another SystemUI restart. Recheck press/release motion and Circle to Search after each Pixel OTA.
+- The v1.0.2 continuity path was validated by physical observation on a first-generation Pixel Fold outer display across newly opened apps without another SystemUI restart. Recheck press/release motion and Circle to Search after each Pixel OTA.
 - Folded/unfolded and transient-navigation states can use different handle instances; each discovered instance is animated independently.
 
 ## Privacy and license

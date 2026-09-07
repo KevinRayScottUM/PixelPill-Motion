@@ -1,12 +1,23 @@
 # Changelog
 
-## 1.0.3 - 2026-09-03
+## 1.0.2 - 2026-09-07
 
+- Fixed delayed or stuck pill recovery after `ACTION_UP` in applications by removing the
+  incorrect dependency between touch completion and Quickstep's optional luma-sampling state.
+- Start recovery from Quickstep's native `NavHandleLongPressHandler.onTouchFinished` lifecycle
+  callback, with an input-consumer after-hook fallback for builds that omit that callback.
+- Kept the continuity surface active during recovery, so the Android 17 Pixel Fold Insets
+  leash flicker remains suppressed without delaying the animation behind an app-transition or
+  sampling-state barrier.
+- Added diagnostic event/down timestamps and delivery-lag measurements used to verify equivalent
+  press latency on the Launcher, Chrome, QQ, WeChat, and Settings.
+- Verified rapid repeated taps in multiple applications with battery saver active and confirmed
+  that the native long-press path still launches Circle to Search.
 - Fixed the Android 17 Pixel Fold outer-display pill flash that returned for every newly opened application until SystemUI was restarted.
 - Moved the Fold taskbar pill pixels to a small Launcher-owned navigation-panel continuity surface that is independent of each application's transient navigation Insets animation leash.
 - Kept the native `StashedHandleView` attached, visible, and fully available to Quickstep for touch handling, long-press recognition, region state, and Circle to Search; only its duplicate drawable pixels are transparent while the continuity surface is active.
 - Bound animation state to the current attached handle and valid `ViewRoot`/`SurfaceControl`, with detach cleanup that cancels animators, removes the continuity window, restores native drawing, and discards stale state.
-- Synchronized release with Quickstep's real sampling/lifecycle callback and moved luma sampling above the complete taskbar surface to prevent self-sampling black/white feedback. No app-specific rules, guessed delay, or automatic SystemUI restart is used.
+- Moved luma sampling above the complete taskbar surface to prevent self-sampling black/white feedback while keeping release independent of the optional sampling lifecycle.
 - Added opt-in lifecycle, handle, surface, animation, and navigation-color diagnostics for future Pixel OTA investigations; stable builds keep verbose diagnostics disabled.
 
 ## 1.0.2-rc2 - 2026-09-02

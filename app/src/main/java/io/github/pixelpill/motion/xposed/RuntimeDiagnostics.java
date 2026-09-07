@@ -172,8 +172,13 @@ final class RuntimeDiagnostics {
                             && event.getActionMasked() != MotionEvent.ACTION_CANCEL)) return;
                     DRAW_TRACE_UNTIL = SystemClock.elapsedRealtime() + 800L;
                     Object controller = fieldObject(p.thisObject, "mNavHandle");
+                    long deliveryLag = Math.max(0L,
+                            SystemClock.uptimeMillis() - event.getEventTime());
                     diag("PPM-ANIM", "input consumer=" + id(p.thisObject) + " action="
                             + MotionEvent.actionToString(event.getActionMasked())
+                            + " eventTime=" + event.getEventTime()
+                            + " downTime=" + event.getDownTime()
+                            + " deliveryLagMs=" + deliveryLag
                             + " display=" + call(event, "getDisplayId")
                             + " controller=" + id(controller)
                             + " " + controllerState(controller));

@@ -9,7 +9,7 @@
 5. 打开模块设置。默认 AOSP-like 参数为：按下宽度 76%、按下 120 ms、回弹 190 ms、overshoot 8%、轻触觉。
 6. 先测试普通点按，再长按确认 Circle to Search 正常出现。
 
-从 v1.0.3 起，Pixel Fold 外屏会使用一个不接收触摸的独立连续显示层来绘制小白条，避免新 App 的导航 Insets 动画层在松手瞬间隐藏原生像素。原生小白条 View 仍保持连接、可见并负责触摸和长按，因此 Circle to Search 的系统输入链不会被替换。打开新的 App 不需要再次重启 SystemUI。
+从 v1.0.2 起，Pixel Fold 外屏会使用一个不接收触摸的独立连续显示层来绘制小白条，避免新 App 的导航 Insets 动画层在松手瞬间隐藏原生像素。松手恢复直接跟随 Quickstep 原生 `onTouchFinished` 生命周期，不再等待可能被应用切换、输入法或省电模式关闭的亮度采样状态。原生小白条 View 仍保持连接、可见并负责触摸和长按，因此 Circle to Search 的系统输入链不会被替换。打开新的 App 不需要再次重启 SystemUI。
 
 ## 安全恢复
 

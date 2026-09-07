@@ -216,14 +216,6 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
                                     verbose("Inactive taskbar handle rejected: down=" + down);
                                     return;
                                 }
-                                LauncherHandleAnimationState animationState = launcherStateFor(
-                                        p.thisObject, handle);
-                                if (!down && deferNativeLauncherRelease(
-                                        p.thisObject, animationState, p)) {
-                                    verbose("Native taskbar release held behind system-state barrier");
-                                    return;
-                                }
-                                if (down) cancelDeferredLauncherRelease(animationState);
                                 float target = down ? (shrink ? ratio(cfg) : 1.18f) : 1f;
                                 boolean owned = animateLauncherScaleX(p.thisObject, handle,
                                         target, down ? cfg.pressDuration : cfg.releaseDuration,
@@ -250,9 +242,6 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
                                     ensureContinuityOverlay(p.thisObject, handle, state);
                                     syncContinuityOverlayVisibility(
                                             p.thisObject, handle, state);
-                                    maybeStartDeferredLauncherRelease(
-                                            p.thisObject, handle, state, cfg,
-                                            true, false);
                                 } else if (!cfg.enabled) {
                                     cleanupLauncherHandle(handle, p.thisObject);
                                 }
@@ -521,49 +510,35 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
                         Object inside = XposedHelpers.callMethod(
                                 p.thisObject, "isInNavBarHorizontalArea", event.getRawX());
                         if (inside instanceof Boolean && (Boolean) inside) {
-                            cancelDeferredLauncherRelease(launcherStateFor(navHandle, localHandle));
                             driveLauncherNavHandle(navHandle, true, cfg);
                             verbose("Launcher consumer: ACTION_DOWN");
                         }
                     } else if ((action == MotionEvent.ACTION_UP
                             || action == MotionEvent.ACTION_CANCEL)
                             && Boolean.TRUE.equals(LAUNCHER_PRESSED.get(navHandle))) {
-                        LauncherHandleAnimationState state = launcherStateFor(
-                                navHandle, localHandle);
-                        synchronized (state) {
-                            state.deferNativeRelease = true;
-                            state.releasePending = true;
-                            state.awaitingReleaseStateCallback = true;
-                        }
-                        LAUNCHER_PRESSED.put(navHandle, false);
-                        p.setObjectExtra("pixelpill.deferredRelease", navHandle);
-                        p.setObjectExtra("pixelpill.releaseOnHome",
-                                isLauncherTopTask(p.thisObject, localHandle));
+                        // Let Quickstep finish its native ACTION_UP/CANCEL path first. Its
+                        // NavHandleLongPressHandler (also hooked above) normally starts our
+                        // recovery synchronously. The after-hook below is only a deterministic
+                        // fallback for builds that disable or omit that native callback.
+                        p.setObjectExtra("pixelpill.ensureRelease", navHandle);
                         verbose("Launcher consumer: ACTION_" + (action == MotionEvent.ACTION_UP
-                                ? "UP" : "CANCEL") + " entered system-state barrier");
+                                ? "UP" : "CANCEL") + " received");
                     }
                 } catch (Throwable t) { log("Launcher input-consumer animation skipped", t); }
             }
 
             @Override protected void afterHookedMethod(MethodHookParam p) {
-                Object navHandle = p.getObjectExtra("pixelpill.deferredRelease");
+                Object navHandle = p.getObjectExtra("pixelpill.ensureRelease");
                 if (navHandle == null) return;
                 try {
-                    View handle = launcherHandleView(navHandle);
-                    if (handle == null) return;
-                    LauncherHandleAnimationState state = launcherStateFor(navHandle, handle);
-                    synchronized (state) {
-                        state.deferNativeRelease = false;
-                    }
-                    MotionConfig cfg = config(handle.getContext());
-                    boolean releaseOnHome = Boolean.TRUE.equals(
-                            p.getObjectExtra("pixelpill.releaseOnHome"));
-                    if (!maybeStartDeferredLauncherRelease(navHandle, handle, state, cfg,
-                            false, releaseOnHome)) {
-                        verbose("Taskbar release waiting for stable system state");
+                    if (Boolean.TRUE.equals(LAUNCHER_PRESSED.get(navHandle))) {
+                        View handle = launcherHandleView(navHandle);
+                        if (handle == null) return;
+                        driveLauncherNavHandle(navHandle, false, config(handle.getContext()));
+                        verbose("Taskbar release completed by input-consumer fallback");
                     }
                 } catch (Throwable t) {
-                    log("Launcher release barrier completion skipped", t);
+                    log("Launcher input-consumer release fallback skipped", t);
                 }
             }
         }).size();
@@ -582,77 +557,6 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
     private static void invokeLauncherNavHandle(Object navHandle, boolean down, MotionConfig cfg) {
         long duration = Math.max(40, down ? cfg.pressDuration : cfg.releaseDuration);
         XposedHelpers.callMethod(navHandle, "animateNavBarLongPress", down, true, duration);
-    }
-
-    private static boolean deferNativeLauncherRelease(Object controller,
-            LauncherHandleAnimationState state, XC_MethodHook.MethodHookParam p) {
-        synchronized (state) {
-            if (!state.deferNativeRelease) return false;
-            state.releasePending = true;
-        }
-        LAUNCHER_PRESSED.put(controller, false);
-        if (canSkipAnimationMethod(p)) p.setResult(null);
-        return true;
-    }
-
-    private static void cancelDeferredLauncherRelease(LauncherHandleAnimationState state) {
-        synchronized (state) {
-            state.deferNativeRelease = false;
-            state.releasePending = false;
-            state.awaitingReleaseStateCallback = false;
-        }
-    }
-
-    /**
-     * Start the visual recovery only after Quickstep has finished its ACTION_UP state hand-off.
-     * This uses the same state callback that controls the navigation-bar sampling lifecycle; it is
-     * not a guessed delay and therefore adapts to slow app/insets transitions.
-     */
-    private static boolean maybeStartDeferredLauncherRelease(Object controller, View handle,
-            LauncherHandleAnimationState state, MotionConfig cfg,
-            boolean fromSystemStateCallback, boolean allowWithoutStateCallback) {
-        if (!cfg.enabled || !isActiveLauncherHandle(controller, handle)) return false;
-        synchronized (state) {
-            if (!state.releasePending) return false;
-            if (fromSystemStateCallback) state.awaitingReleaseStateCallback = false;
-            if (state.deferNativeRelease
-                    || (state.awaitingReleaseStateCallback && !allowWithoutStateCallback)) {
-                return false;
-            }
-            if (allowWithoutStateCallback) state.awaitingReleaseStateCallback = false;
-        }
-        boolean ready;
-        try {
-            ready = !XposedHelpers.getBooleanField(controller, "mIsAppTransitionPending")
-                    && XposedHelpers.getBooleanField(controller, "mIsLumaSamplingEnabled")
-                    && XposedHelpers.getBooleanField(controller, "mIsStashed")
-                    && !XposedHelpers.getBooleanField(controller, "mTaskbarHidden");
-        } catch (Throwable ignored) {
-            return false;
-        }
-        if (!ready) return false;
-        synchronized (state) {
-            if (!state.releasePending || state.deferNativeRelease) return false;
-            state.releasePending = false;
-        }
-        boolean started = animateLauncherScaleX(controller, handle, 1f,
-                cfg.releaseDuration, true, cfg.overshoot);
-        if (started) verbose("Taskbar release started after stable system-state callback");
-        return started;
-    }
-
-    private static boolean isLauncherTopTask(Object inputConsumer, View handle) {
-        try {
-            Object tracker = XposedHelpers.getObjectField(inputConsumer, "mTopTaskTracker");
-            int displayId = handle.getDisplay() == null
-                    ? Display.DEFAULT_DISPLAY : handle.getDisplay().getDisplayId();
-            Object task = XposedHelpers.callMethod(
-                    tracker, "getCachedTopTask", true, displayId);
-            Object packageName = XposedHelpers.callMethod(task, "getPackageName");
-            return PIXEL_LAUNCHER.equals(packageName) || AOSP_LAUNCHER.equals(packageName);
-        } catch (Throwable ignored) {
-            return false;
-        }
     }
 
     private static View launcherHandleView(Object navHandle) {
@@ -786,9 +690,6 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
                 restoreNativeBackground = state.nativeHandleHidden;
                 state.animator = null;
                 state.continuityColorAnimator = null;
-                state.deferNativeRelease = false;
-                state.releasePending = false;
-                state.awaitingReleaseStateCallback = false;
                 state.colorFrozen = false;
                 state.postRecoveryColorGuard = false;
                 state.baselineRegionDark = null;
@@ -1566,9 +1467,6 @@ public final class PillMotionHook implements IXposedHookLoadPackage {
         ValueAnimator animator;
         float currentScale = 1f;
         boolean moduleOwnsDrawing;
-        boolean deferNativeRelease;
-        boolean releasePending;
-        boolean awaitingReleaseStateCallback;
         boolean colorFrozen;
         boolean postRecoveryColorGuard;
         Boolean baselineRegionDark;
